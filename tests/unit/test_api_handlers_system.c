@@ -6,6 +6,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _GNU_SOURCE
 
+#include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -365,7 +366,11 @@ static int collect_scope_fallback_fixture(void *state,
     memset(&observation, 0, sizeof(observation));
     safe_strcpy(observation.metric, "container.cpu.usage_ratio",
                 sizeof(observation.metric), 0);
-    safe_strcpy(observation.resource_id, "host",
+    // linux_cgroup.c's init_observation() always stamps container-scoped
+    // observations with resource_id "self", never "host" -- matching that
+    // exactly here so this fixture can't mask a future regression of the
+    // same resource-filter class of bug PR #590 fixed.
+    safe_strcpy(observation.resource_id, "self",
                 sizeof(observation.resource_id), 0);
     observation.scope = SYSTEM_HEALTH_SCOPE_CONTAINER;
     observation.sampled_monotonic_ms = context->monotonic_ms;
@@ -389,7 +394,7 @@ static int collect_scope_fallback_fixture(void *state,
     memset(&observation, 0, sizeof(observation));
     safe_strcpy(observation.metric, "container.memory.limit_bytes",
                 sizeof(observation.metric), 0);
-    safe_strcpy(observation.resource_id, "host",
+    safe_strcpy(observation.resource_id, "self",
                 sizeof(observation.resource_id), 0);
     observation.scope = SYSTEM_HEALTH_SCOPE_CONTAINER;
     observation.sampled_monotonic_ms = context->monotonic_ms;
@@ -413,7 +418,7 @@ static int collect_scope_fallback_fixture(void *state,
     memset(&observation, 0, sizeof(observation));
     safe_strcpy(observation.metric, "container.memory.available_bytes",
                 sizeof(observation.metric), 0);
-    safe_strcpy(observation.resource_id, "host",
+    safe_strcpy(observation.resource_id, "self",
                 sizeof(observation.resource_id), 0);
     observation.scope = SYSTEM_HEALTH_SCOPE_CONTAINER;
     observation.sampled_monotonic_ms = context->monotonic_ms;
@@ -444,7 +449,7 @@ void test_handle_get_system_info_falls_back_to_host_metrics_when_container_metri
     TEST_ASSERT_EQUAL_INT(0, system_health_init(&options));
     system_health_collector_t collector = {
         .name = "scope_fallback_fixture",
-        .scope = SYSTEM_HEALTH_SCOPE_HOST,
+        .scope = SYSTEM_HEALTH_SCOPE_CONTAINER,
         .tier = SYSTEM_HEALTH_TIER_FAST,
         .interval_seconds = 10,
         .stale_after_seconds = 30,
@@ -478,13 +483,19 @@ void test_handle_get_system_info_falls_back_to_host_metrics_when_container_metri
     cJSON *cpu = cJSON_GetObjectItemCaseSensitive(root, "cpu");
     cJSON *cpu_usage = cJSON_GetObjectItemCaseSensitive(cpu, "usage");
     TEST_ASSERT_TRUE(cJSON_IsNumber(cpu_usage));
-    TEST_ASSERT_EQUAL_INT(42, (int)cpu_usage->valuedouble);
+    // Compare with a tolerance rather than truncating to int: the fixture's
+    // 0.42 * 100.0 scale happens to land on exactly 42.0 today, but an exact
+    // int-cast comparison would be silently flaky if that literal or the
+    // scale factor ever changed to a value that doesn't round as cleanly.
+    TEST_ASSERT_TRUE(fabs(cpu_usage->valuedouble - 42.0) < 0.01);
     cJSON *cpu_capability = cJSON_GetObjectItemCaseSensitive(cpu, "usageCapability");
+    TEST_ASSERT_TRUE(cJSON_IsString(cpu_capability));
     TEST_ASSERT_EQUAL_STRING("available", cpu_capability->valuestring);
 
     cJSON *system_memory = cJSON_GetObjectItemCaseSensitive(root, "systemMemory");
     cJSON *memory_capability = cJSON_GetObjectItemCaseSensitive(system_memory,
                                                                 "capability");
+    TEST_ASSERT_TRUE(cJSON_IsString(memory_capability));
     TEST_ASSERT_EQUAL_STRING("available", memory_capability->valuestring);
 
     cJSON_Delete(root);
