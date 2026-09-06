@@ -481,6 +481,7 @@ void test_handle_get_system_info_falls_back_to_host_metrics_when_container_metri
     cJSON *root = parse_response_json(&res);
 
     cJSON *cpu = cJSON_GetObjectItemCaseSensitive(root, "cpu");
+    TEST_ASSERT_TRUE(cJSON_IsObject(cpu));
     cJSON *cpu_usage = cJSON_GetObjectItemCaseSensitive(cpu, "usage");
     TEST_ASSERT_TRUE(cJSON_IsNumber(cpu_usage));
     // Compare with a tolerance rather than truncating to int: the fixture's
@@ -493,10 +494,23 @@ void test_handle_get_system_info_falls_back_to_host_metrics_when_container_metri
     TEST_ASSERT_EQUAL_STRING("available", cpu_capability->valuestring);
 
     cJSON *system_memory = cJSON_GetObjectItemCaseSensitive(root, "systemMemory");
+    TEST_ASSERT_TRUE(cJSON_IsObject(system_memory));
     cJSON *memory_capability = cJSON_GetObjectItemCaseSensitive(system_memory,
                                                                 "capability");
     TEST_ASSERT_TRUE(cJSON_IsString(memory_capability));
     TEST_ASSERT_EQUAL_STRING("available", memory_capability->valuestring);
+    // Assert the actual host figures came through, not just the capability
+    // string -- a regression that returned null/wrong memory numbers while
+    // still reporting "available" would otherwise pass this test.
+    cJSON *memory_total = cJSON_GetObjectItemCaseSensitive(system_memory, "total");
+    TEST_ASSERT_TRUE(cJSON_IsNumber(memory_total));
+    TEST_ASSERT_TRUE(fabs(memory_total->valuedouble - 16000000000.0) < 1.0);
+    cJSON *memory_free = cJSON_GetObjectItemCaseSensitive(system_memory, "free");
+    TEST_ASSERT_TRUE(cJSON_IsNumber(memory_free));
+    TEST_ASSERT_TRUE(fabs(memory_free->valuedouble - 4000000000.0) < 1.0);
+    cJSON *memory_used = cJSON_GetObjectItemCaseSensitive(system_memory, "used");
+    TEST_ASSERT_TRUE(cJSON_IsNumber(memory_used));
+    TEST_ASSERT_TRUE(fabs(memory_used->valuedouble - 12000000000.0) < 1.0);
 
     cJSON_Delete(root);
     http_response_free(&res);
