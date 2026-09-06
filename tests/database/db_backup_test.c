@@ -672,12 +672,32 @@ static int count_timestamped_backups(const char *db_path) {
 }
 
 static void remove_test_db_and_backups(const char *db_path) {
+    char path[PATH_MAX];
+    static const char *sidecar_suffixes[] = {"", ".bak", "-wal", "-shm", "-journal"};
+    for (size_t i = 0; i < sizeof(sidecar_suffixes) / sizeof(sidecar_suffixes[0]); i++) {
+        snprintf(path, sizeof(path), "%s%s", db_path, sidecar_suffixes[i]);
+        unlink(path);
+    }
+
+    // A stale <db_path>.bak or -wal/-shm/-journal sidecar left behind by an
+    // earlier test would otherwise let init_database_ex() pick up a bogus
+    // last_backup_time (it stat()s the .bak path at startup) or a stale WAL,
+    // causing cross-test interference in this shared-connection test binary.
     char backup_dir[PATH_MAX];
-    char command[PATH_MAX + 16];
-    unlink(db_path);
     snprintf(backup_dir, sizeof(backup_dir), "%s.backups", db_path);
-    snprintf(command, sizeof(command), "rm -rf '%s'", backup_dir);
-    (void)system(command);
+    DIR *dir = opendir(backup_dir);
+    if (dir) {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            snprintf(path, sizeof(path), "%s/%s", backup_dir, entry->d_name);
+            unlink(path);
+        }
+        closedir(dir);
+        rmdir(backup_dir);
+    }
 }
 
 // Regression test: shutdown_database() used to unconditionally take a full
@@ -691,8 +711,11 @@ static int test_shutdown_skips_backup_when_recent_backup_exists(void) {
 
     // db_core.c holds a single global connection shared across this whole
     // file's main(); create_test_database() (run earlier in main()) opened
-    // TEST_DB_PATH and never closed it, since later steps (corrupt_database())
-    // rely on it still being open. Close it first, same as that function does.
+    // TEST_DB_PATH and left it open -- nothing in between closes it until
+    // corrupt_database() does so itself, later, right before corrupting the
+    // raw file. This test needs a second, separate database open at the same
+    // time, so close the existing connection first, same as corrupt_database()
+    // does for its own reason.
     shutdown_database();
 
     remove_test_db_and_backups(TEST_SHUTDOWN_DB_PATH);
