@@ -893,8 +893,16 @@ void shutdown_database(void) {
     time_t backup_interval_seconds = g_config.db_backup_interval_minutes > 0
         ? (time_t)g_config.db_backup_interval_minutes * 60 : 0;
     time_t now = time(NULL);
+    // now >= last_backup_time guards two edge cases: a backward system clock
+    // jump (NTP correction) after last_backup_time was recorded, and
+    // time(NULL) itself failing (returns (time_t)-1 per POSIX). Either would
+    // otherwise make `now - last_backup_time` negative -- always "less than"
+    // a positive interval -- incorrectly treating a backup as recent (or the
+    // timestamp as "in the future") and skipping the shutdown backup when it
+    // shouldn't be skipped.
     bool recent_backup_exists = backup_interval_seconds > 0 &&
-        last_backup_time != 0 && now - last_backup_time < backup_interval_seconds;
+        last_backup_time != 0 && now >= last_backup_time &&
+        now - last_backup_time < backup_interval_seconds;
 
     if (db_init_flags & DB_INIT_NO_BACKUP) {
         log_info("Skipping shutdown backup (read-only initialization)");
